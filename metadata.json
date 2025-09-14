@@ -1,0 +1,5 @@
+{
+  "name": "Circle+",
+  "description": "A new type of social media where circles (groups) are the only accounts. Users don’t have personal profiles; they exist only inside circles. Circles can be public or private, have feeds, members, and shared rewards.",
+  "requestFramePermissions": []
+}

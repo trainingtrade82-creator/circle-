@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjU2IiBjeT0iMjU2IiByPSIxODAiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMjAiLz48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEwMCIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IndoaXRlIj5DSVJDTEU8L3RleHQ+PGc+PGNpcmNsZSBjeD0iNDAwIiBjeT0iMTEyIiByPSIzMCIgZmlsbD0iYmxhY2siIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNIDQwMCA5MiBMIDQwMCAxMzIgTSAzODAgMTEyIEwgNDIwIDExMiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIxMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjwvc3ZnPg=="/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Circle+</title>
+    <script>
+      // Prevent Flash of Unstyled Content (FOUC)
+      const theme = localStorage.getItem('theme') || 'system';
+      const docEl = document.documentElement;
+      docEl.classList.remove('dark', 'grey', 'blue');
+      if (theme === 'dark') {
+        docEl.classList.add('dark');
+      } else if (theme === 'grey') {
+        docEl.classList.add('grey');
+      } else if (theme === 'blue') {
+        docEl.classList.add('blue');
+      } else if (theme === 'system') {
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          docEl.classList.add('dark');
+        }
+      }
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'brand-bg': 'var(--color-brand-bg)',
+            'brand-surface': 'var(--color-brand-surface)',
+            'brand-border': 'var(--color-brand-border)',
+            'brand-text-primary': 'var(--color-brand-text-primary)',
+            'brand-text-secondary': 'var(--color-brand-text-secondary)',
+            'brand-primary': 'var(--color-brand-primary)',
+            'brand-secondary': 'var(--color-brand-secondary)',
+            'brand-accent': 'var(--color-brand-accent)',
+            'brand-danger': 'var(--color-brand-danger)',
+          },
+        }
+      }
+    }
+    </script>
+    <style>
+      :root {
+        /* Light Theme Colors */
+        --color-brand-bg: #FFFFFF;
+        --color-brand-surface: #F6F8FA;
+        --color-brand-border: #D0D7DE;
+        --color-brand-text-primary: #1F2328;
+        --color-brand-text-secondary: #656D76;
+        --color-brand-primary: #0969DA;
+        --color-brand-secondary: #0550AE;
+        --color-brand-accent: #1F883D;
+        --color-brand-danger: #CF222E;
+      }
+
+      html.dark {
+        /* Dark Theme Colors */
+        --color-brand-bg: #0D1117;
+        --color-brand-surface: #161B22;
+        --color-brand-border: #30363d;
+        --color-brand-text-primary: #E6EDF3;
+        --color-brand-text-secondary: #8B949E;
+        --color-brand-primary: #58A6FF;
+        --color-brand-secondary: #1F6FEB;
+        --color-brand-accent: #3FB950;
+        --color-brand-danger: #F85149;
+      }
+      
+      html.grey {
+        /* Grey Theme Colors */
+        --color-brand-bg: #212121;
+        --color-brand-surface: #333333;
+        --color-brand-border: #424242;
+        --color-brand-text-primary: #F2F2F2;
+        --color-brand-text-secondary: #BDBDBD;
+        --color-brand-primary: #BDBDBD;
+        --color-brand-secondary: #9E9E9E;
+        --color-brand-accent: #828282;
+        --color-brand-danger: #E57373;
+      }
+      
+      html.blue {
+        /* Blue Theme Colors */
+        --color-brand-bg: #0A192F;
+        --color-brand-surface: #172A45;
+        --color-brand-border: #30415d;
+        --color-brand-text-primary: #CCD6F6;
+        --color-brand-text-secondary: #8892B0;
+        --color-brand-primary: #64FFDA;
+        --color-brand-secondary: #52D3B8;
+        --color-brand-accent: #FFC700;
+        --color-brand-danger: #F85149;
+      }
+      
+      body {
+        background-color: var(--color-brand-bg);
+      }
+
+      /* Custom Scrollbar Styling */
+      /* For Webkit-based browsers (Chrome, Safari, Edge, etc.) */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: var(--color-brand-surface);
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background-color: var(--color-brand-border);
+        border-radius: 20px;
+        border: 2px solid var(--color-brand-surface); /* to create a padding effect */
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background-color: var(--color-brand-text-secondary);
+      }
+
+      /* For Firefox */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--color-brand-border) var(--color-brand-surface); /* thumb color track color */
+      }
+
+      /* Splash Screen Styles */
+      #splash-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background-color: var(--color-brand-bg);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        transition: opacity 0.5s ease-out, visibility 0.5s ease-out;
+      }
+      #splash-screen.fade-out {
+        opacity: 0;
+        visibility: hidden;
+      }
+      #splash-screen.hidden {
+        display: none;
+      }
+      #splash-screen h1 {
+        font-size: 4rem;
+        font-weight: 800;
+        color: var(--color-brand-text-primary);
+        animation: pulse 2s infinite ease-in-out;
+        letter-spacing: -0.05em;
+      }
+      #splash-screen h1 > span {
+        color: var(--color-brand-primary);
+      }
+      @keyframes pulse {
+        0%, 100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.05);
+        }
+      }
+      
+      @keyframes fade-in {
+        from { opacity: 0; transform: scale(0.8); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      .animate-fade-in {
+        animation: fade-in 0.2s ease-out;
+      }
+
+      @keyframes slide-up-and-fade {
+        0%, 100% {
+          opacity: 0;
+          transform: translate(-50%, 20px);
+        }
+        15%, 85% {
+          opacity: 1;
+          transform: translate(-50%, 0);
+        }
+      }
+      .animate-feedback-popup {
+        animation: slide-up-and-fade 2s ease-in-out forwards;
+      }
+      .animate-error-popup {
+        animation: slide-up-and-fade 3s ease-in-out forwards;
+      }
+
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "react": "https://esm.sh/react@^19.1.1",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="splash-screen">
+      <h1>Circle<span>+</span></h1>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
