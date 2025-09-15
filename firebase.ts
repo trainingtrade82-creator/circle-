@@ -7,14 +7,14 @@ import type { Circle, Post, User, ChatConversation, UserConversation, Notificati
 
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCC0zsn50VGGEC3-HJ19lWMrKS2-YDcwYU",
-  authDomain: "circle-c134c.firebaseapp.com",
-  databaseURL: "https://circle-c134c-default-rtdb.firebaseio.com",
-  projectId: "circle-c134c",
-  storageBucket: "circle-c134c.firebasestorage.app",
-  messagingSenderId: "747239155370",
-  appId: "1:747239155370:web:e50afd300ba47629e9d2d3",
-  measurementId: "G-DXGJQCZC32"
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.FIREBASE_DATABASE_URL,
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.FIREBASE_APP_ID,
+  measurementId: process.env.FIREBASE_MEASUREMENT_ID
 };
 
 if (!firebase.apps.length) {

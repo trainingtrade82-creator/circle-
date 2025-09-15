@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import type { Circle, User, Post, Member, Comment, ChatMessage, Story, DirectMessage, ChatConversation, UserConversation, Notification, Highlight } from './types';
+import type { Circle, User, Post, Member, Comment, ChatMessage, Story, DirectMessage, ChatConversation, UserConversation, Notification, Highlight, StorySuggestion } from './types';
 import { CircleType, Role, ActiveCircleTab, StoryType, ChatAccess } from './types';
 import { Navbar } from './components/Navbar';
 import { CreateCircleModal } from './components/CreateCircleModal';
@@ -59,17 +59,6 @@ const isStoryActive = (story: Story): boolean => {
 type ViewingStoryState = { circles: (Circle & { originalCircleId?: string })[], initialCircleId: string } | null;
 export type Theme = 'light' | 'dark' | 'grey' | 'blue' | 'system';
 
-const generateUniqueUsername = (name: string, allUsers: User[]): string => {
-    const baseUsername = `@${name.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/gi, '')}`;
-    let username = baseUsername;
-    let counter = 1;
-    while (allUsers.some(u => u.username === username)) {
-        username = `${baseUsername}${counter}`;
-        counter++;
-    }
-    return username;
-};
-
 export const App: React.FC = () => {
     const [authUser, setAuthUser] = useState<firebase.User | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -77,6 +66,7 @@ export const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'system');
     const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
+    const [postGoogleSignUpUser, setPostGoogleSignUpUser] = useState<firebase.User | null>(null);
 
     // --- All data state is now from Firestore ---
     const [circles, setCircles] = useState<Circle[]>([]);
@@ -122,11 +112,15 @@ export const App: React.FC = () => {
         setHistory(prev => [...prev, view]);
     }, []);
 
-    // FIX: Renamed `handleBack` to `onBack` to fix a scope error where `onBack` was used as a shorthand property in `pageProps` but was not defined.
     const onBack = useCallback(() => {
         setHistory(prev => (prev.length > 1 ? prev.slice(0, -1) : prev));
     }, []);
     
+    // FIX: Define onViewProfile to be passed to ShareModal.
+    const onViewProfile = useCallback((userId: string) => {
+        navigate({ type: 'USER_PROFILE', userId });
+    }, [navigate]);
+
     // --- FIREBASE DATA LISTENERS ---
     useEffect(() => {
         // Seed database with mock data if it's empty
@@ -146,6 +140,9 @@ export const App: React.FC = () => {
     // --- FIREBASE AUTH ---
      useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
+            // Don't change auth state while waiting for Google sign-up details
+            if (postGoogleSignUpUser) return;
+
             setIsLoading(true);
             if (user) {
                 setAuthUser(user);
@@ -154,9 +151,7 @@ export const App: React.FC = () => {
                 if (doc.exists) {
                     setCurrentUser({ id: doc.id, ...doc.data() } as User);
                 } else {
-                    // This case handles a user that authenticated but doesn't have a user document yet.
-                    // The redirect handler will create it.
-                    console.log("Authenticated user has no user document yet.");
+                    console.log("Authenticated user has no user document yet. Waiting for details.");
                 }
             } else {
                 setAuthUser(null);
@@ -165,7 +160,7 @@ export const App: React.FC = () => {
             setIsLoading(false);
         });
         return () => unsubscribe();
-    }, []);
+    }, [postGoogleSignUpUser]);
     
     useEffect(() => {
         const processRedirect = async () => {
@@ -173,41 +168,18 @@ export const App: React.FC = () => {
                 const result = await auth.getRedirectResult();
                 if (result && result.user) {
                     const user = result.user;
+                    const isNewUser = result.additionalUserInfo?.isNewUser;
                     const userRef = db.collection('users').doc(user.uid);
                     const doc = await userRef.get();
-                    if (!doc.exists) {
-                        const usersSnapshot = await db.collection('users').get();
-                        const allCurrentUsers = usersSnapshot.docs.map(d => d.data() as User);
-                        
-                        const newUser: User = {
-                            id: user.uid,
-                            name: user.displayName || 'Google User',
-                            username: generateUniqueUsername(user.displayName || 'user', allCurrentUsers),
-                            email: user.email!,
-                            bio: '',
-                            birthDate: '',
-                            memberships: [],
-                            isGoogleAccount: true,
-                            picture: user.photoURL || `https://picsum.photos/seed/${user.uid}/100`,
-                            friends: [],
-                            friendRequestsSent: [],
-                            friendRequestsReceived: [],
-                            blockedUsers: [],
-                            mutedUsers: [],
-                            isPrivate: false,
-                            savedPosts: [],
-                            interestedTags: [],
-                            notInterestedTags: [],
-                            hiddenCircleIds: [],
-                            hasCompletedOnboarding: false,
-                        };
-                        await userRef.set(newUser);
+
+                    if (isNewUser || !doc.exists) {
+                        setPostGoogleSignUpUser(user);
                     }
                 }
             } catch (error: any) {
                 console.error("Google sign in redirect error:", error);
                 if (error.code === 'auth/operation-not-supported-in-this-environment') {
-                    setAuthRedirectError("Google Sign-In is not supported in this browser environment. Please open the app in a new tab or try a different sign-in method.");
+                    setAuthRedirectError("Google Sign-In is not supported in this browser environment. Please try a different sign-in method.");
                 } else {
                     setAuthRedirectError(`An error occurred during sign-in: ${error.message}`);
                 }
@@ -246,11 +218,44 @@ export const App: React.FC = () => {
         }
     };
 
-    const handleGoogleSignIn = async () => {
+    const handleGoogleSignIn = async (): Promise<void> => {
         try {
             await auth.signInWithRedirect(googleProvider);
         } catch (error: any) {
-            console.error("Google sign in error", error.message);
+            console.error("Google sign in error:", error);
+            if (error.code === 'auth/operation-not-supported-in-this-environment') {
+                // Re-throw a user-friendly message to be caught by the UI component
+                throw new Error("Google Sign-In is not supported in this environment. Please try another sign-in method.");
+            }
+            // Re-throw other errors to be handled by the UI
+            throw error;
+        }
+    };
+
+    const handleCompleteGoogleSignUp = async (name: string, username: string, birthDate: string): Promise<string | null> => {
+        if (!postGoogleSignUpUser) return "An unexpected error occurred. Please try again.";
+        try {
+            const usernameQuery = await db.collection('users').where('username', '==', username).get();
+            if (!usernameQuery.empty) {
+                return "Username is already taken. Please choose another one.";
+            }
+
+            const user = postGoogleSignUpUser;
+            const newUser: User = {
+                id: user.uid, name, username,
+                email: user.email!, bio: '', birthDate,
+                memberships: [], isGoogleAccount: true,
+                picture: user.photoURL || `https://picsum.photos/seed/${user.uid}/100`,
+                friends: [], friendRequestsSent: [], friendRequestsReceived: [],
+                blockedUsers: [], mutedUsers: [], isPrivate: false,
+                savedPosts: [], interestedTags: [], notInterestedTags: [],
+                hiddenCircleIds: [], hasCompletedOnboarding: false,
+            };
+            await db.collection('users').doc(user.uid).set(newUser);
+            setPostGoogleSignUpUser(null);
+            return null;
+        } catch (error: any) {
+            return error.message;
         }
     };
     
@@ -352,6 +357,237 @@ export const App: React.FC = () => {
         });
     };
 
+    const handleToggleSavePost = (postId: string) => {
+        if (!currentUser) return;
+        const userRef = db.collection('users').doc(currentUser.id);
+        const isSaved = currentUser.savedPosts.includes(postId);
+    
+        if (isSaved) {
+            userRef.update({
+                savedPosts: firebase.firestore.FieldValue.arrayRemove(postId)
+            });
+        } else {
+            userRef.update({
+                savedPosts: firebase.firestore.FieldValue.arrayUnion(postId)
+            });
+        }
+    };
+
+    const handleDeletePost = async (postId: string) => {
+        if (!currentUser) return;
+        const post = allPosts.find(p => p.id === postId);
+        if (!post) return;
+        
+        if (window.confirm('Are you sure you want to delete this post?')) {
+            await db.collection('posts').doc(postId).delete();
+            await db.collection('circles').doc(post.circleId).update({
+                posts: firebase.firestore.FieldValue.arrayRemove(postId)
+            });
+        }
+    };
+    
+    const handleHideCircle = (circleId: string) => {
+        if (!currentUser) return;
+        db.collection('users').doc(currentUser.id).update({
+            hiddenCircleIds: firebase.firestore.FieldValue.arrayUnion(circleId)
+        });
+    };
+
+    const handleMarkInterested = (postId: string) => {
+        if (!currentUser) return;
+        const post = allPosts.find(p => p.id === postId);
+        const circle = circles.find(c => c.id === post?.circleId);
+        if (!circle) return;
+
+        db.collection('users').doc(currentUser.id).update({
+            interestedTags: firebase.firestore.FieldValue.arrayUnion(...circle.tags),
+            notInterestedTags: firebase.firestore.FieldValue.arrayRemove(...circle.tags)
+        });
+    };
+    
+    const handleMarkNotInterested = (postId: string) => {
+        if (!currentUser) return;
+        const post = allPosts.find(p => p.id === postId);
+        const circle = circles.find(c => c.id === post?.circleId);
+        if (!circle) return;
+
+        db.collection('users').doc(currentUser.id).update({
+            notInterestedTags: firebase.firestore.FieldValue.arrayUnion(...circle.tags),
+            interestedTags: firebase.firestore.FieldValue.arrayRemove(...circle.tags)
+        });
+    };
+
+    const handleSuggestForStory = (postId: string, circleId: string) => {
+        if (!currentUser) return;
+        const suggestion: StorySuggestion = {
+            id: `ss-${Date.now()}`,
+            postId,
+            suggesterUserId: currentUser.id,
+            timestamp: new Date()
+        };
+        db.collection('circles').doc(circleId).update({
+            storySuggestions: firebase.firestore.FieldValue.arrayUnion(suggestion)
+        });
+    };
+
+    const handleApproveRequest = (circleId: string, userId: string) => {
+        if (!currentUser) return;
+        const userToApprove = users.find(u => u.id === userId);
+        if (!userToApprove) return;
+        
+        const newMember: Member = {
+            id: userId, nickname: userToApprove.name,
+            tagId: `#${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+            role: Role.Contributor, loyaltyPoints: 0, chatAccess: ChatAccess.Full,
+        };
+
+        db.collection('circles').doc(circleId).update({
+            members: firebase.firestore.FieldValue.arrayUnion(newMember),
+            joinRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+        db.collection('users').doc(userId).update({
+            memberships: firebase.firestore.FieldValue.arrayUnion(circleId)
+        });
+    };
+
+    const handleDenyRequest = (circleId: string, userId: string) => {
+        if (!currentUser) return;
+        db.collection('circles').doc(circleId).update({
+            joinRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+    };
+
+    const handleDeleteCircle = async (circleId: string) => {
+        if (!currentUser) return;
+        const circle = circles.find(c => c.id === circleId);
+        if (!circle) return;
+    
+        if (window.confirm(`Are you sure you want to delete "${circle.name}"? This action cannot be undone.`)) {
+            const batch = db.batch();
+            batch.delete(db.collection('circles').doc(circleId));
+            circle.members.forEach(member => {
+                batch.update(db.collection('users').doc(member.id), {
+                    memberships: firebase.firestore.FieldValue.arrayRemove(circleId)
+                });
+            });
+            circle.posts.forEach(postId => {
+                batch.delete(db.collection('posts').doc(postId));
+            });
+            await batch.commit();
+    
+            if (currentView.type === 'CIRCLE' && currentView.id === circleId) {
+                navigate({ type: 'HOME' });
+            }
+        }
+    };
+    
+    const handleRequestPromotion = (circleId: string) => {
+        if (!currentUser) return;
+        db.collection('circles').doc(circleId).update({
+            promotionRequests: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+        });
+    };
+
+    const handleRequestChatAccess = (circleId: string) => {
+        if (!currentUser) return;
+        db.collection('circles').doc(circleId).update({
+            chatAccessRequests: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+        });
+    };
+
+    const handleApprovePromotion = async (circleId: string, userId: string) => {
+        const circleRef = db.collection('circles').doc(circleId);
+        const doc = await circleRef.get();
+        if (!doc.exists) return;
+        const circle = doc.data() as Circle;
+        const updatedMembers = circle.members.map(m => m.id === userId ? { ...m, role: Role.Contributor } : m);
+        circleRef.update({
+            members: updatedMembers,
+            promotionRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+    };
+
+    const handleDenyPromotion = (circleId: string, userId: string) => {
+        db.collection('circles').doc(circleId).update({
+            promotionRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+    };
+
+    const handleApproveChatAccess = async (circleId: string, userId: string, accessLevel: ChatAccess) => {
+        const circleRef = db.collection('circles').doc(circleId);
+        const doc = await circleRef.get();
+        if (!doc.exists) return;
+        const circle = doc.data() as Circle;
+        const updatedMembers = circle.members.map(m => m.id === userId ? { ...m, chatAccess: accessLevel } : m);
+        circleRef.update({
+            members: updatedMembers,
+            chatAccessRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+    };
+
+    const handleDenyChatAccess = (circleId: string, userId: string) => {
+        db.collection('circles').doc(circleId).update({
+            chatAccessRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+        });
+    };
+
+    const handleSendFriendRequest = (receiverId: string) => {
+        if (!currentUser) return;
+        db.collection('users').doc(currentUser.id).update({
+            friendRequestsSent: firebase.firestore.FieldValue.arrayUnion(receiverId)
+        });
+        db.collection('users').doc(receiverId).update({
+            friendRequestsReceived: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+        });
+    };
+
+    const handleAcceptFriendRequest = (senderId: string) => {
+        if (!currentUser) return;
+        db.collection('users').doc(currentUser.id).update({
+            friends: firebase.firestore.FieldValue.arrayUnion(senderId),
+            friendRequestsReceived: firebase.firestore.FieldValue.arrayRemove(senderId)
+        });
+        db.collection('users').doc(senderId).update({
+            friends: firebase.firestore.FieldValue.arrayUnion(currentUser.id),
+            friendRequestsSent: firebase.firestore.FieldValue.arrayRemove(currentUser.id)
+        });
+    };
+
+    const handleDeclineFriendRequest = (senderId: string) => {
+        if (!currentUser) return;
+        db.collection('users').doc(currentUser.id).update({
+            friendRequestsReceived: firebase.firestore.FieldValue.arrayRemove(senderId)
+        });
+        db.collection('users').doc(senderId).update({
+            friendRequestsSent: firebase.firestore.FieldValue.arrayRemove(currentUser.id)
+        });
+    };
+    
+    const handleNotificationAction = (notificationId: string, result: 'handled' | 'denied') => {
+        db.collection('notifications').doc(notificationId).update({
+            actionState: result,
+            isRead: true
+        });
+    };
+
+    const handleDismissStorySuggestion = async (circleId: string, postId: string) => {
+        const circleRef = db.collection('circles').doc(circleId);
+        const doc = await circleRef.get();
+        if (!doc.exists) return;
+        const circle = doc.data() as Circle;
+        const updatedSuggestions = (circle.storySuggestions || []).filter(s => s.postId !== postId);
+        circleRef.update({ storySuggestions: updatedSuggestions });
+    };
+
+    const handleCreateStoryFromSuggestion = (circleId: string, postId: string) => {
+        const post = allPosts.find(p => p.id === postId);
+        if (post) {
+            setSharingPost(post);
+            setCreateStoryModalOpen(true);
+        }
+        handleDismissStorySuggestion(circleId, postId);
+    };
+
     const handleAddComment = (postId: string, content: string) => {
         if (!currentUser) return;
         const post = allPosts.find(p => p.id === postId);
@@ -437,7 +673,14 @@ export const App: React.FC = () => {
     }
     
     if (!currentUser) {
-        return <AuthPage onLogin={handleLogin} onSignUp={handleSignUp} onGoogleSignIn={handleGoogleSignIn} initialError={authRedirectError} />;
+        return <AuthPage 
+            onLogin={handleLogin} 
+            onSignUp={handleSignUp} 
+            onGoogleSignIn={handleGoogleSignIn} 
+            initialError={authRedirectError}
+            postGoogleSignUpUser={postGoogleSignUpUser}
+            onCompleteGoogleSignUp={handleCompleteGoogleSignUp}
+        />;
     }
 
     if (!currentUser.hasCompletedOnboarding) {
@@ -454,9 +697,9 @@ export const App: React.FC = () => {
         const pageProps = { currentUser, circles, allUsers: users, navigate, onBack, onViewProfile: (userId: string) => navigate({ type: 'USER_PROFILE', userId }),};
         switch (currentView.type) {
             case 'HOME':
-                return <HomePage {...pageProps} myCircles={myCircles} allPosts={allPosts} circlesWithActiveStories={myCirclesWithActiveStories} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onLeaveCircle={handleLeaveCircle} onDeletePost={()=>{}} onViewStory={(circleId) => setViewingStoryState({ circles: myCirclesWithActiveStories, initialCircleId: circleId })} onOpenCreateStory={() => setCreateStoryModalOpen(true)} onOpenChats={() => navigate({type: 'CHATS'})} onToggleSavePost={(postId) => {}} onSharePost={handleSharePost} unreadNotificationsCount={0} onOpenNotifications={() => navigate({ type: 'NOTIFICATIONS' })} hasUnreadChats={false} onHideCircle={() => {}} onMarkInterested={() => {}} onMarkNotInterested={() => {}} onSuggestForStory={() => {}} />;
+                return <HomePage {...pageProps} myCircles={myCircles} allPosts={allPosts} circlesWithActiveStories={myCirclesWithActiveStories} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onLeaveCircle={handleLeaveCircle} onDeletePost={handleDeletePost} onViewStory={(circleId) => setViewingStoryState({ circles: myCirclesWithActiveStories, initialCircleId: circleId })} onOpenCreateStory={() => setCreateStoryModalOpen(true)} onOpenChats={() => navigate({type: 'CHATS'})} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} unreadNotificationsCount={0} onOpenNotifications={() => navigate({ type: 'NOTIFICATIONS' })} hasUnreadChats={false} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'EXPLORE':
-                return <ExplorePage {...pageProps} exploreFeed={allPosts.map(p => p as any)} onJoinCircle={handleJoinCircle} onLeaveCircle={handleLeaveCircle} onRequestToJoinCircle={handleRequestToJoinCircle} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={()=>{}} onSharePost={handleSharePost} onRefresh={() => {}} onHideCircle={() => {}} onMarkInterested={() => {}} onMarkNotInterested={() => {}} onSuggestForStory={() => {}} />;
+                return <ExplorePage {...pageProps} exploreFeed={allPosts.map(p => p as any)} onJoinCircle={handleJoinCircle} onLeaveCircle={handleLeaveCircle} onRequestToJoinCircle={handleRequestToJoinCircle} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRefresh={() => {}} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'CIRCLES':
                 return <CirclesPage {...pageProps} onLeaveCircle={handleLeaveCircle} />;
             case 'ACCOUNT':
@@ -464,7 +707,7 @@ export const App: React.FC = () => {
             case 'CIRCLE':
                 const circle = circles.find(c => c.id === currentView.id);
                 if (!circle) return <div>Circle not found</div>;
-                return <CirclePage {...pageProps} circle={circle} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onJoin={()=>{}} onRequestToJoin={()=>{}} onApproveRequest={()=>{}} onDenyRequest={()=>{}} onLeave={handleLeaveCircle} onSendMessage={(content) => handleSendMessageInCircle(circle.id, content)} onOpenEditCircle={setEditingCircleId} onOpenManageMembers={setManagingMembersCircleId} onDeleteCircle={()=>{}} onDeletePost={()=>{}} onTabChange={setActiveCircleTab} onToggleSavePost={()=>{}} onSharePost={handleSharePost} onRequestPromotion={()=>{}} onRequestChatAccess={()=>{}} onApprovePromotion={()=>{}} onDenyPromotion={()=>{}} onApproveChatAccess={()=>{}} onDenyChatAccess={()=>{}} onHideCircle={() => {}} onMarkInterested={() => {}} onMarkNotInterested={() => {}} onSuggestForStory={() => {}} onOpenHighlightViewer={() => {}} onOpenEditHighlight={() => {}} onOpenCreatePostModal={setCreatePostForCircleId} />;
+                return <CirclePage {...pageProps} circle={circle} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onJoin={handleJoinCircle} onRequestToJoin={handleRequestToJoinCircle} onApproveRequest={handleApproveRequest} onDenyRequest={handleDenyRequest} onLeave={handleLeaveCircle} onSendMessage={(content) => handleSendMessageInCircle(circle.id, content)} onOpenEditCircle={setEditingCircleId} onOpenManageMembers={setManagingMembersCircleId} onDeleteCircle={handleDeleteCircle} onDeletePost={handleDeletePost} onTabChange={setActiveCircleTab} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRequestPromotion={handleRequestPromotion} onRequestChatAccess={handleRequestChatAccess} onApprovePromotion={handleApprovePromotion} onDenyPromotion={handleDenyPromotion} onApproveChatAccess={handleApproveChatAccess} onDenyChatAccess={handleDenyChatAccess} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} onOpenHighlightViewer={() => {}} onOpenEditHighlight={() => {}} onOpenCreatePostModal={setCreatePostForCircleId} />;
              case 'CHATS':
                 return <ChatListPage {...pageProps} circleConversations={conversations} userConversations={userConversations} activeTab={activeChatListTab} onTabChange={setActiveChatListTab} unreadCircleCount={0} unreadFriendCount={0} unreadRequestCount={0} onMarkRequestsAsRead={() => {}} />;
             case 'CONVERSATION':
@@ -473,7 +716,7 @@ export const App: React.FC = () => {
                 if (!conversation) return <div>Conversation not found.</div>;
                 return <ChatConversationPage {...pageProps} conversation={conversation} conversationType={isUserConvo ? 'user' : 'circle'} allPosts={allPosts} onSendCircleMessage={() => {}} onSendUserMessage={() => {}} onAcceptRequest={() => {}} onDeclineRequest={() => {}} onBlockUser={() => {}} onMarkAsRead={() => {}} />;
             case 'FRIENDS':
-                 return <FriendsPage {...pageProps} onSendFriendRequest={() => {}} onAcceptFriendRequest={() => {}} onDeclineFriendRequest={() => {}} />;
+                 return <FriendsPage {...pageProps} onSendFriendRequest={handleSendFriendRequest} onAcceptFriendRequest={handleAcceptFriendRequest} onDeclineFriendRequest={handleDeclineFriendRequest} />;
             case 'USER_CIRCLES':
                 const owner = users.find(u => u.id === currentView.listOwnerId);
                 if (!owner) return <div>User not found.</div>;
@@ -483,11 +726,11 @@ export const App: React.FC = () => {
             case 'BLOCKED_USERS':
                 return <BlockedUsersPage {...pageProps} onUnblockUser={() => {}} />;
             case 'SAVED_POSTS':
-                return <SavedPostsPage {...pageProps} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={()=>{}} onDeletePost={()=>{}} onLeaveCircle={handleLeaveCircle} onSharePost={handleSharePost} onMarkInterested={() => {}} onMarkNotInterested={() => {}} onHideCircle={() => {}} onSuggestForStory={() => {}} />;
+                return <SavedPostsPage {...pageProps} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={handleToggleSavePost} onDeletePost={handleDeletePost} onLeaveCircle={handleLeaveCircle} onSharePost={handleSharePost} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onHideCircle={handleHideCircle} onSuggestForStory={handleSuggestForStory} />;
             case 'USER_PROFILE':
-                return <UserProfilePage {...pageProps} targetUserId={currentView.userId} onSendFriendRequest={() => {}} onNavigateToChat={() => {}} />;
+                return <UserProfilePage {...pageProps} targetUserId={currentView.userId} onSendFriendRequest={handleSendFriendRequest} onNavigateToChat={() => {}} />;
             case 'NOTIFICATIONS':
-                return <NotificationPage {...pageProps} notifications={notifications} allPosts={allPosts} onAcceptFriendRequest={()=>{}} onDeclineFriendRequest={()=>{}} onApproveCircleRequest={()=>{}} onDenyCircleRequest={()=>{}} onApprovePromotion={()=>{}} onDenyPromotion={()=>{}} onApproveChatAccess={()=>{}} onDenyChatAccess={()=>{}} onCreateStoryFromSuggestion={()=>{}} onDismissStorySuggestion={()=>{}} onHandleNotificationAction={()=>{}} unreadRequestCount={0} unreadActivityCount={0} onMarkAsRead={()=>{}} />;
+                return <NotificationPage {...pageProps} notifications={notifications} allPosts={allPosts} onAcceptFriendRequest={handleAcceptFriendRequest} onDeclineFriendRequest={handleDeclineFriendRequest} onApproveCircleRequest={handleApproveRequest} onDenyCircleRequest={handleDenyRequest} onApprovePromotion={handleApprovePromotion} onDenyPromotion={handleDenyPromotion} onApproveChatAccess={handleApproveChatAccess} onDenyChatAccess={handleDenyChatAccess} onCreateStoryFromSuggestion={handleCreateStoryFromSuggestion} onDismissStorySuggestion={handleDismissStorySuggestion} onHandleNotificationAction={handleNotificationAction} unreadRequestCount={0} unreadActivityCount={0} onMarkAsRead={()=>{}} />;
             default: return <div>Not implemented</div>;
         }
     };
@@ -510,13 +753,13 @@ export const App: React.FC = () => {
 
             {isCreateCircleModalOpen && <CreateCircleModal onClose={() => setCreateCircleModalOpen(false)} onCreate={handleCreateCircle} />}
             {createPostForCircleId && <CreatePostModal circle={circles.find(c => c.id === createPostForCircleId)!} onClose={() => setCreatePostForCircleId(null)} onCreate={handleCreatePost} />}
-            {commentingPostId && <CommentModal post={allPosts.find(p => p.id === commentingPostId)!} onClose={() => setCommentingPostId(null)} onAddComment={handleAddComment} currentUser={currentUser} circles={circles} allUsers={users} onViewProfile={(userId) => navigate({type: 'USER_PROFILE', userId})} />}
-            {isEditProfileModalOpen && <EditProfileModal currentUser={currentUser} onClose={() => setEditProfileModalOpen(false)} onSave={() => {}} />}
-            {editingCircleId && <EditCircleModal circle={circles.find(c => c.id === editingCircleId)!} onClose={() => setEditingCircleId(null)} onSave={() => {}} />}
-            {managingMembersCircleId && <ManageMembersModal circle={circles.find(c => c.id === managingMembersCircleId)!} currentUserRole={myCircles.find(c => c.id === managingMembersCircleId)?.members.find(m => m.id === currentUser.id)?.role || Role.Viewer} onClose={() => setManagingMembersCircleId(null)} onUpdateRole={() => {}} onRemoveMember={() => {}} />}
-            {viewingStoryState && <StoryViewerModal {...viewingStoryState} currentUser={currentUser} allPosts={allPosts} onClose={() => setViewingStoryState(null)} onStoryViewed={handleStoryViewed} onAddReaction={()=>{}} onSendReply={()=>{}} navigate={navigate} />}
+            {commentingPostId && <CommentModal post={allPosts.find(p => p.id === commentingPostId)!} onClose={() => setCommentingPostId(null)} onAddComment={handleAddComment} currentUser={currentUser} circles={circles} allUsers={users} onViewProfile={(userId) => navigate({ type: 'USER_PROFILE', userId })} />}
+            {isEditProfileModalOpen && <EditProfileModal currentUser={currentUser} onClose={() => setEditProfileModalOpen(false)} onSave={(data) => db.collection('users').doc(currentUser.id).update(data).then(() => setEditProfileModalOpen(false))} />}
+            {editingCircleId && <EditCircleModal circle={circles.find(c => c.id === editingCircleId)!} onClose={() => setEditingCircleId(null)} onSave={(id, data) => db.collection('circles').doc(id).update(data).then(() => setEditingCircleId(null))} />}
+            {managingMembersCircleId && <ManageMembersModal circle={circles.find(c => c.id === managingMembersCircleId)!} currentUserRole={circles.find(c => c.id === managingMembersCircleId)!.members.find(m => m.id === currentUser.id)!.role} onClose={() => setManagingMembersCircleId(null)} onUpdateRole={(cId, mId, nR) => {}} onRemoveMember={(cId, mId) => {}} />}
+            {viewingStoryState && <StoryViewerModal circles={viewingStoryState.circles} initialCircleId={viewingStoryState.initialCircleId} currentUser={currentUser} allPosts={allPosts} onClose={() => setViewingStoryState(null)} onStoryViewed={handleStoryViewed} onAddReaction={(sId, e) => {}} onSendReply={(sId, cId, t) => {}} navigate={navigate} />}
             {isCreateStoryModalOpen && <CreateStoryModal circles={myCircles} allPosts={allPosts} sharedPost={sharingPost} onClose={() => { setCreateStoryModalOpen(false); setSharingPost(null); }} onCreate={handleCreateStory} />}
-            {sharingPost && !isCreateStoryModalOpen && <ShareModal post={sharingPost} currentUser={currentUser} userConversations={userConversations} circleConversations={conversations} circles={circles} allUsers={users} canCreateStory={true} onClose={() => setSharingPost(null)} onShareToChat={()=>{}} onSharePostToStory={() => setCreateStoryModalOpen(true)} onCopyLink={()=>{}} onNativeShare={()=>{}} navigate={navigate} onViewProfile={(userId) => navigate({type: 'USER_PROFILE', userId})} shareFeedback={shareFeedback} />}
+            {sharingPost && <ShareModal post={sharingPost} currentUser={currentUser} userConversations={userConversations} circleConversations={conversations} circles={circles} allUsers={users} canCreateStory={true} onClose={() => setSharingPost(null)} onShareToChat={() => {}} onSharePostToStory={() => { setCreateStoryModalOpen(true); }} onCopyLink={() => {}} onNativeShare={() => {}} navigate={navigate} onViewProfile={onViewProfile} shareFeedback={shareFeedback} />}
             {addToHighlightItem && <AddToHighlightModal item={addToHighlightItem} circle={circles.find(c => c.id === addToHighlightItem.circleId)!} onClose={() => setAddToHighlightItem(null)} onAddToHighlight={() => {}} />}
             {editingHighlight && <EditHighlightModal circle={editingHighlight.circle} highlight={editingHighlight.highlight} onClose={() => setEditingHighlight(null)} onSave={() => {}} />}
         </div>
