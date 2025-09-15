@@ -138,11 +138,8 @@ export const App: React.FC = () => {
     }, []);
 
     // --- FIREBASE AUTH ---
-     useEffect(() => {
+    useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
-            // Don't change auth state while waiting for Google sign-up details
-            if (postGoogleSignUpUser) return;
-
             setIsLoading(true);
             if (user) {
                 setAuthUser(user);
@@ -150,7 +147,13 @@ export const App: React.FC = () => {
                 const doc = await userRef.get();
                 if (doc.exists) {
                     setCurrentUser({ id: doc.id, ...doc.data() } as User);
+                     // User has a profile, so clear any pending Google Sign-Up state
+                    if (postGoogleSignUpUser) {
+                        setPostGoogleSignUpUser(null);
+                    }
                 } else {
+                    // This case is hit during a new Google sign-up. The user is authenticated,
+                    // but their profile isn't created yet. The AuthPage will handle this.
                     console.log("Authenticated user has no user document yet. Waiting for details.");
                 }
             } else {
@@ -160,7 +163,7 @@ export const App: React.FC = () => {
             setIsLoading(false);
         });
         return () => unsubscribe();
-    }, [postGoogleSignUpUser]);
+    }, []); // This effect should only run once to set up the listener.
     
 
     const handleLogin = async (email: string, password: string): Promise<string | null> => {
@@ -241,7 +244,7 @@ export const App: React.FC = () => {
                 hiddenCircleIds: [], hasCompletedOnboarding: false,
             };
             await db.collection('users').doc(user.uid).set(newUser);
-            setPostGoogleSignUpUser(null);
+            // The onAuthStateChanged listener will pick up the new user doc and clear postGoogleSignUpUser
             return null;
         } catch (error: any) {
             return error.message;
@@ -648,14 +651,14 @@ export const App: React.FC = () => {
 
     useEffect(() => {
         const splashScreen = document.getElementById('splash-screen');
-        if (splashScreen && !appLoadedRef.current) {
+        if (splashScreen && !appLoadedRef.current && !isLoading) {
             appLoadedRef.current = true;
             window.setTimeout(() => {
                 splashScreen.classList.add('fade-out');
                 window.setTimeout(() => splashScreen.classList.add('hidden'), 500);
             }, 500);
         }
-    }, []);
+    }, [isLoading]);
 
     if (isLoading) {
       return null;
