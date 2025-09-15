@@ -6,15 +6,17 @@ import { MOCK_CIRCLES, ALL_POSTS, MOCK_USERS, MOCK_CONVERSATIONS, MOCK_USER_CONV
 import type { Circle, Post, User, ChatConversation, UserConversation, Notification } from './types';
 
 
+// IMPORTANT: Replace these placeholder values with your actual Firebase project configuration.
+// This configuration is meant to be public. Secure your app using Firebase Security Rules.
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.FIREBASE_DATABASE_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID
+  apiKey: "AIzaSy_...-Your-Key-Here", // Replace with your actual API key
+  authDomain: "your-project-id.firebaseapp.com", // Replace with your actual auth domain
+  databaseURL: "https://your-project-id.firebaseio.com", // Replace with your actual database URL
+  projectId: "your-project-id", // Replace with your actual project ID
+  storageBucket: "your-project-id.appspot.com", // Replace with your actual storage bucket
+  messagingSenderId: "your-messaging-sender-id", // Replace with your actual sender ID
+  appId: "your-app-id", // Replace with your actual app ID
+  measurementId: "G-your-measurement-id" // Optional: Replace with your measurement ID
 };
 
 if (!firebase.apps.length) {

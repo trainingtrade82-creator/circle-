@@ -162,31 +162,6 @@ export const App: React.FC = () => {
         return () => unsubscribe();
     }, [postGoogleSignUpUser]);
     
-    useEffect(() => {
-        const processRedirect = async () => {
-            try {
-                const result = await auth.getRedirectResult();
-                if (result && result.user) {
-                    const user = result.user;
-                    const isNewUser = result.additionalUserInfo?.isNewUser;
-                    const userRef = db.collection('users').doc(user.uid);
-                    const doc = await userRef.get();
-
-                    if (isNewUser || !doc.exists) {
-                        setPostGoogleSignUpUser(user);
-                    }
-                }
-            } catch (error: any) {
-                console.error("Google sign in redirect error:", error);
-                if (error.code === 'auth/operation-not-supported-in-this-environment') {
-                    setAuthRedirectError("Google Sign-In is not supported in this browser environment. Please try a different sign-in method.");
-                } else {
-                    setAuthRedirectError(`An error occurred during sign-in: ${error.message}`);
-                }
-            }
-        };
-        processRedirect();
-    }, []);
 
     const handleLogin = async (email: string, password: string): Promise<string | null> => {
         try {
@@ -220,9 +195,23 @@ export const App: React.FC = () => {
 
     const handleGoogleSignIn = async (): Promise<void> => {
         try {
-            await auth.signInWithRedirect(googleProvider);
+            const result = await auth.signInWithPopup(googleProvider);
+            if (result && result.user) {
+                const user = result.user;
+                const isNewUser = result.additionalUserInfo?.isNewUser;
+                const userRef = db.collection('users').doc(user.uid);
+                const doc = await userRef.get();
+
+                if (isNewUser || !doc.exists) {
+                    setPostGoogleSignUpUser(user);
+                }
+            }
         } catch (error: any) {
-            console.error("Google sign in error:", error);
+            console.error("Google sign in popup error:", error);
+            if (error.code === 'auth/popup-closed-by-user') {
+                // This is not a critical error, so we can just return.
+                return;
+            }
             if (error.code === 'auth/operation-not-supported-in-this-environment') {
                 // Re-throw a user-friendly message to be caught by the UI component
                 throw new Error("Google Sign-In is not supported in this environment. Please try another sign-in method.");
