@@ -10,6 +10,7 @@ import type { Circle, Post, User, ChatConversation, UserConversation, Notificati
 const firebaseConfig = {
   apiKey: "AIzaSyA1fBsjMR9ALfFRqxWYAiNfW1I6vAkScoM",
   authDomain: "circle-62f06.firebaseapp.com",
+  databaseURL: "https://circle-62f06.firebaseio.com",
   projectId: "circle-62f06",
   storageBucket: "circle-62f06.appspot.com",
   messagingSenderId: "987929795468",
