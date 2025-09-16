@@ -1,3 +1,5 @@
+
+
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import type { Circle, User, Post, Member, Comment, ChatMessage, Story, DirectMessage, ChatConversation, UserConversation, Notification, Highlight, StorySuggestion } from './types';
 import { CircleType, Role, ActiveCircleTab, StoryType, ChatAccess } from './types';
@@ -139,31 +141,43 @@ export const App: React.FC = () => {
 
     // --- FIREBASE AUTH ---
     useEffect(() => {
-        const unsubscribe = auth.onAuthStateChanged(async (user) => {
+        let userDocListener: (() => void) | undefined;
+
+        const authListener = auth.onAuthStateChanged(user => {
+            if (userDocListener) userDocListener(); // Cleanup previous listener
+
             setIsLoading(true);
             if (user) {
                 setAuthUser(user);
-                const userRef = db.collection('users').doc(user.uid);
-                const doc = await userRef.get();
-                if (doc.exists) {
-                    setCurrentUser({ id: doc.id, ...doc.data() } as User);
-                     // User has a profile, so clear any pending Google Sign-Up state
-                    if (postGoogleSignUpUser) {
-                        setPostGoogleSignUpUser(null);
+                userDocListener = db.collection('users').doc(user.uid).onSnapshot(doc => {
+                    if (doc.exists) {
+                        setCurrentUser({ id: doc.id, ...doc.data() } as User);
+                        setPostGoogleSignUpUser(null); // Profile exists, we are not in a pending sign-up state.
+                    } else {
+                        setCurrentUser(null);
+                        // This is a new user or an account where the DB entry was deleted.
+                        // Check if they used Google to sign in.
+                        if (user.providerData.some(p => p?.providerId === 'google.com')) {
+                            // Trigger the profile completion flow.
+                            setPostGoogleSignUpUser(user);
+                        }
                     }
-                } else {
-                    // This case is hit during a new Google sign-up. The user is authenticated,
-                    // but their profile isn't created yet. The AuthPage will handle this.
-                    console.log("Authenticated user has no user document yet. Waiting for details.");
-                }
+                    setIsLoading(false);
+                });
             } else {
+                // No user is signed in
                 setAuthUser(null);
                 setCurrentUser(null);
+                setPostGoogleSignUpUser(null);
+                setIsLoading(false);
             }
-            setIsLoading(false);
         });
-        return () => unsubscribe();
-    }, []); // This effect should only run once to set up the listener.
+
+        return () => {
+            authListener();
+            if (userDocListener) userDocListener();
+        };
+    }, []); // This should only run once to set up the listeners.
     
 
     const handleLogin = async (email: string, password: string): Promise<string | null> => {
@@ -198,17 +212,8 @@ export const App: React.FC = () => {
 
     const handleGoogleSignIn = async (): Promise<void> => {
         try {
-            const result = await auth.signInWithPopup(googleProvider);
-            if (result && result.user) {
-                const user = result.user;
-                const isNewUser = result.additionalUserInfo?.isNewUser;
-                const userRef = db.collection('users').doc(user.uid);
-                const doc = await userRef.get();
-
-                if (isNewUser || !doc.exists) {
-                    setPostGoogleSignUpUser(user);
-                }
-            }
+            // Simply initiate the sign-in. The onAuthStateChanged listener is now responsible for handling the result.
+            await auth.signInWithPopup(googleProvider);
         } catch (error: any) {
             console.error("Google sign in popup error:", error);
             if (error.code === 'auth/popup-closed-by-user') {
@@ -691,6 +696,7 @@ export const App: React.FC = () => {
             case 'HOME':
                 return <HomePage {...pageProps} myCircles={myCircles} allPosts={allPosts} circlesWithActiveStories={myCirclesWithActiveStories} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onLeaveCircle={handleLeaveCircle} onDeletePost={handleDeletePost} onViewStory={(circleId) => setViewingStoryState({ circles: myCirclesWithActiveStories, initialCircleId: circleId })} onOpenCreateStory={() => setCreateStoryModalOpen(true)} onOpenChats={() => navigate({type: 'CHATS'})} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} unreadNotificationsCount={0} onOpenNotifications={() => navigate({ type: 'NOTIFICATIONS' })} hasUnreadChats={false} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'EXPLORE':
+                // FIX: Corrected typo from onRequestToJoinCircle to handleRequestToJoinCircle.
                 return <ExplorePage {...pageProps} exploreFeed={allPosts.map(p => p as any)} onJoinCircle={handleJoinCircle} onLeaveCircle={handleLeaveCircle} onRequestToJoinCircle={handleRequestToJoinCircle} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRefresh={() => {}} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'CIRCLES':
                 return <CirclesPage {...pageProps} onLeaveCircle={handleLeaveCircle} />;
@@ -699,6 +705,7 @@ export const App: React.FC = () => {
             case 'CIRCLE':
                 const circle = circles.find(c => c.id === currentView.id);
                 if (!circle) return <div>Circle not found</div>;
+                // FIX: Corrected typo from onRequestToJoinCircle to handleRequestToJoinCircle.
                 return <CirclePage {...pageProps} circle={circle} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onJoin={handleJoinCircle} onRequestToJoin={handleRequestToJoinCircle} onApproveRequest={handleApproveRequest} onDenyRequest={handleDenyRequest} onLeave={handleLeaveCircle} onSendMessage={(content) => handleSendMessageInCircle(circle.id, content)} onOpenEditCircle={setEditingCircleId} onOpenManageMembers={setManagingMembersCircleId} onDeleteCircle={handleDeleteCircle} onDeletePost={handleDeletePost} onTabChange={setActiveCircleTab} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRequestPromotion={handleRequestPromotion} onRequestChatAccess={handleRequestChatAccess} onApprovePromotion={handleApprovePromotion} onDenyPromotion={handleDenyPromotion} onApproveChatAccess={handleApproveChatAccess} onDenyChatAccess={handleDenyChatAccess} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} onOpenHighlightViewer={() => {}} onOpenEditHighlight={() => {}} onOpenCreatePostModal={setCreatePostForCircleId} />;
              case 'CHATS':
                 return <ChatListPage {...pageProps} circleConversations={conversations} userConversations={userConversations} activeTab={activeChatListTab} onTabChange={setActiveChatListTab} unreadCircleCount={0} unreadFriendCount={0} unreadRequestCount={0} onMarkRequestsAsRead={() => {}} />;

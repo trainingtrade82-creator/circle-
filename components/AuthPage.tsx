@@ -33,8 +33,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin, onSignUp, onGoogleS
             setName(postGoogleSignUpUser.displayName || '');
             setEmail(postGoogleSignUpUser.email || '');
             setView('google-signup');
+        } else if (view === 'google-signup') {
+            // This handles the case where the sign-up process is cancelled or completed elsewhere,
+            // preventing the user from being stuck on this view.
+            setView('landing');
         }
-    }, [postGoogleSignUpUser]);
+    }, [postGoogleSignUpUser, view]);
 
     const performAgeCheck = () => {
         if (!birthDate) {
