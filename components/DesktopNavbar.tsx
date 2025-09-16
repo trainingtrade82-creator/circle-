@@ -27,7 +27,6 @@ export const DesktopNavbar: React.FC<DesktopNavbarProps> = ({ currentUser, activ
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            // FIX: Corrected typo from userMenuMenuRef to userMenuRef
             if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
                 setUserMenuOpen(false);
             }

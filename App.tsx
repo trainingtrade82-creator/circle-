@@ -1,5 +1,3 @@
-
-
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import type { Circle, User, Post, Member, Comment, ChatMessage, Story, DirectMessage, ChatConversation, UserConversation, Notification, Highlight, StorySuggestion } from './types';
 import { CircleType, Role, ActiveCircleTab, StoryType, ChatAccess } from './types';
@@ -34,8 +32,17 @@ import { AddToHighlightModal } from './components/AddToHighlightModal';
 import { EditHighlightModal } from './components/EditHighlightModal';
 import { DesktopNavbar } from './components/DesktopNavbar';
 import { DesktopSidebar } from './components/DesktopSidebar';
-import { auth, db, googleProvider, seedDatabase } from './firebase';
-import firebase from 'firebase/compat/app';
+// FIX: Use v8 compat firebase instance and helpers.
+import { auth, db, googleProvider, seedDatabase, Timestamp, FieldValue } from './firebase';
+import { 
+    onAuthStateChanged, 
+    signInWithEmailAndPassword, 
+    createUserWithEmailAndPassword, 
+    signInWithPopup, 
+    signOut,
+    type User as FirebaseUser
+} from 'firebase/auth';
+
 
 export type View =
     | { type: 'HOME' }
@@ -62,13 +69,14 @@ type ViewingStoryState = { circles: (Circle & { originalCircleId?: string })[], 
 export type Theme = 'light' | 'dark' | 'grey' | 'blue' | 'system';
 
 export const App: React.FC = () => {
-    const [authUser, setAuthUser] = useState<firebase.User | null>(null);
+    const [authUser, setAuthUser] = useState<FirebaseUser | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [users, setUsers] = useState<User[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'system');
     const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
-    const [postGoogleSignUpUser, setPostGoogleSignUpUser] = useState<firebase.User | null>(null);
+    const [postGoogleSignUpUser, setPostGoogleSignUpUser] = useState<FirebaseUser | null>(null);
+    const [firestoreError, setFirestoreError] = useState<string | null>(null);
 
     // --- All data state is now from Firestore ---
     const [circles, setCircles] = useState<Circle[]>([]);
@@ -118,7 +126,6 @@ export const App: React.FC = () => {
         setHistory(prev => (prev.length > 1 ? prev.slice(0, -1) : prev));
     }, []);
     
-    // FIX: Define onViewProfile to be passed to ShareModal.
     const onViewProfile = useCallback((userId: string) => {
         navigate({ type: 'USER_PROFILE', userId });
     }, [navigate]);
@@ -128,13 +135,38 @@ export const App: React.FC = () => {
         // Seed database with mock data if it's empty
         seedDatabase();
 
+        const handleError = (error: Error, collectionName: string) => {
+            console.error(`Firestore '${collectionName}' listener error:`, error);
+            if (error.message.toLowerCase().includes('unavailable') || error.message.toLowerCase().includes('failed to get document')) {
+                 setFirestoreError(
+                    "The application could not connect to your database. This usually happens for one of two reasons:\n\n**1. The Firestore Database isn't created yet.**\n- Go to your Firebase Console -> Firestore Database.\n- If you see a **'Create database'** button, click it.\n- Start in **Test mode** (this also sets the correct security rules for now).\n- Choose a location and click **Enable**.\n\n**2. Your Security Rules have expired.** (If you've already created the database)\n- Go to the **Rules** tab in the Firestore section.\n- Replace the content with the development rules below and click **Publish**.\n\n```\nrules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}\n```\n**Warning**: These rules are for development only and make your database public. Secure your data before production.\n\nAfter fixing the issue, please **refresh the application**."
+                 );
+            } else {
+                 setFirestoreError(`An error occurred while fetching data from Firestore (${collectionName}): ${error.message}`);
+            }
+        };
+
+        const createListener = (collectionName: string, setter: React.Dispatch<React.SetStateAction<any[]>>) => {
+            // FIX: Use v8 compat syntax for onSnapshot listener.
+            return db.collection(collectionName).onSnapshot((snapshot) => {
+                setter(snapshot.docs.map(doc => {
+                    const data = doc.data();
+                    // Convert Firestore Timestamps to JS Dates
+                    if (data.timestamp && data.timestamp instanceof Timestamp) {
+                        data.timestamp = data.timestamp.toDate();
+                    }
+                    return { id: doc.id, ...data };
+                }));
+            }, (error) => handleError(error, collectionName));
+        };
+
         const listeners = [
-            db.collection('users').onSnapshot(snapshot => setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)))),
-            db.collection('circles').onSnapshot(snapshot => setCircles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Circle)))),
-            db.collection('posts').onSnapshot(snapshot => setAllPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), timestamp: (doc.data().timestamp as firebase.firestore.Timestamp)?.toDate() } as Post)))),
-            db.collection('conversations').onSnapshot(snapshot => setConversations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChatConversation)))),
-            db.collection('userConversations').onSnapshot(snapshot => setUserConversations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserConversation)))),
-            db.collection('notifications').onSnapshot(snapshot => setNotifications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Notification)))),
+            createListener('users', setUsers),
+            createListener('circles', setCircles),
+            createListener('posts', setAllPosts),
+            createListener('conversations', setConversations),
+            createListener('userConversations', setUserConversations),
+            createListener('notifications', setNotifications),
         ];
         return () => listeners.forEach(unsubscribe => unsubscribe());
     }, []);
@@ -142,16 +174,16 @@ export const App: React.FC = () => {
     // --- FIREBASE AUTH ---
     useEffect(() => {
         let userDocListener: (() => void) | undefined;
-
-        const authListener = auth.onAuthStateChanged(user => {
+        const authListener = onAuthStateChanged(auth, user => {
             if (userDocListener) userDocListener(); // Cleanup previous listener
 
             setIsLoading(true);
             if (user) {
                 setAuthUser(user);
-                userDocListener = db.collection('users').doc(user.uid).onSnapshot(doc => {
-                    if (doc.exists) {
-                        setCurrentUser({ id: doc.id, ...doc.data() } as User);
+                // FIX: Use v8 compat syntax for document onSnapshot listener.
+                userDocListener = db.collection('users').doc(user.uid).onSnapshot(docSnap => {
+                    if (docSnap.exists) {
+                        setCurrentUser({ id: docSnap.id, ...docSnap.data() } as User);
                         setPostGoogleSignUpUser(null); // Profile exists, we are not in a pending sign-up state.
                     } else {
                         setCurrentUser(null);
@@ -182,7 +214,7 @@ export const App: React.FC = () => {
 
     const handleLogin = async (email: string, password: string): Promise<string | null> => {
         try {
-            await auth.signInWithEmailAndPassword(email, password);
+            await signInWithEmailAndPassword(auth, email, password);
             return null;
         } catch (error: any) {
             return error.message;
@@ -191,15 +223,18 @@ export const App: React.FC = () => {
     
     const handleSignUp = async (name: string, username: string, email: string, password: string, birthDate: string): Promise<string | null> => {
         try {
-            const usernameQuery = await db.collection('users').where('username', '==', username).get();
-            if (!usernameQuery.empty) {
+            // FIX: Use v8 compat syntax for query.
+            const usernameQuery = db.collection('users').where('username', '==', username);
+            const usernameSnapshot = await usernameQuery.get();
+            if (!usernameSnapshot.empty) {
                 return "Username is already taken. Please choose another one.";
             }
-            const cred = await auth.createUserWithEmailAndPassword(email, password);
+            const cred = await createUserWithEmailAndPassword(auth, email, password);
             if (cred.user) {
                 const newUser: User = {
                     id: cred.user.uid, name, username, email, birthDate, bio: '', memberships: [], friends: [], friendRequestsSent: [], friendRequestsReceived: [], blockedUsers: [], mutedUsers: [], isPrivate: false, savedPosts: [], interestedTags: [], notInterestedTags: [], hiddenCircleIds: [], hasCompletedOnboarding: false,
                 };
+                // FIX: Use v8 compat syntax for set.
                 await db.collection('users').doc(cred.user.uid).set(newUser);
             }
             return null;
@@ -212,19 +247,15 @@ export const App: React.FC = () => {
 
     const handleGoogleSignIn = async (): Promise<void> => {
         try {
-            // Simply initiate the sign-in. The onAuthStateChanged listener is now responsible for handling the result.
-            await auth.signInWithPopup(googleProvider);
+            await signInWithPopup(auth, googleProvider);
         } catch (error: any) {
             console.error("Google sign in popup error:", error);
             if (error.code === 'auth/popup-closed-by-user') {
-                // This is not a critical error, so we can just return.
                 return;
             }
             if (error.code === 'auth/operation-not-supported-in-this-environment') {
-                // Re-throw a user-friendly message to be caught by the UI component
                 throw new Error("Google Sign-In is not supported in this environment. Please try another sign-in method.");
             }
-            // Re-throw other errors to be handled by the UI
             throw error;
         }
     };
@@ -232,8 +263,10 @@ export const App: React.FC = () => {
     const handleCompleteGoogleSignUp = async (name: string, username: string, birthDate: string): Promise<string | null> => {
         if (!postGoogleSignUpUser) return "An unexpected error occurred. Please try again.";
         try {
-            const usernameQuery = await db.collection('users').where('username', '==', username).get();
-            if (!usernameQuery.empty) {
+            // FIX: Use v8 compat syntax for query.
+            const usernameQuery = db.collection('users').where('username', '==', username);
+            const usernameSnapshot = await usernameQuery.get();
+            if (!usernameSnapshot.empty) {
                 return "Username is already taken. Please choose another one.";
             }
 
@@ -248,8 +281,8 @@ export const App: React.FC = () => {
                 savedPosts: [], interestedTags: [], notInterestedTags: [],
                 hiddenCircleIds: [], hasCompletedOnboarding: false,
             };
+            // FIX: Use v8 compat syntax for set.
             await db.collection('users').doc(user.uid).set(newUser);
-            // The onAuthStateChanged listener will pick up the new user doc and clear postGoogleSignUpUser
             return null;
         } catch (error: any) {
             return error.message;
@@ -257,13 +290,14 @@ export const App: React.FC = () => {
     };
     
     const handleLogout = async () => {
-        await auth.signOut();
+        await signOut(auth);
         setCurrentUser(null);
         setHistory([{ type: 'HOME' }]);
     };
 
     const handleFinishOnboarding = () => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update.
         db.collection('users').doc(currentUser.id).update({ hasCompletedOnboarding: true });
     };
 
@@ -271,6 +305,7 @@ export const App: React.FC = () => {
     // --- DATA MANIPULATION (Firestore) ---
     const handleCreateCircle = async (circleData: Omit<Circle, 'id' | 'members' | 'posts' | 'chatMessages' | 'stories'>) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for creating a new document reference and setting data.
         const newCircleRef = db.collection('circles').doc();
         const newCircle: Circle = {
             ...circleData,
@@ -279,8 +314,9 @@ export const App: React.FC = () => {
             posts: [], chatMessages: [], stories: [],
         };
         await newCircleRef.set(newCircle);
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         await db.collection('users').doc(currentUser.id).update({
-            memberships: firebase.firestore.FieldValue.arrayUnion(newCircle.id)
+            memberships: FieldValue.arrayUnion(newCircle.id)
         });
         setCreateCircleModalOpen(false);
         navigate({ type: 'CIRCLE', id: newCircle.id });
@@ -291,18 +327,20 @@ export const App: React.FC = () => {
         const newMember: Member = {
             id: currentUser.id, nickname: currentUser.name, tagId: `#${Math.random().toString(36).substring(2, 7).toUpperCase()}`, role: Role.Contributor, loyaltyPoints: 0, chatAccess: ChatAccess.Full,
         };
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            members: firebase.firestore.FieldValue.arrayUnion(newMember)
+            members: FieldValue.arrayUnion(newMember)
         });
         db.collection('users').doc(currentUser.id).update({
-            memberships: firebase.firestore.FieldValue.arrayUnion(circleId)
+            memberships: FieldValue.arrayUnion(circleId)
         });
     };
 
     const handleRequestToJoinCircle = (circleId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            joinRequests: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+            joinRequests: FieldValue.arrayUnion(currentUser.id)
         });
     };
 
@@ -311,9 +349,10 @@ export const App: React.FC = () => {
         const circle = circles.find(c => c.id === circleId);
         if(!circle) return;
         const updatedMembers = circle.members.filter(m => m.id !== currentUser.id);
+        // FIX: Use v8 compat syntax for update and arrayRemove.
         db.collection('circles').doc(circleId).update({ members: updatedMembers });
         db.collection('users').doc(currentUser.id).update({
-            memberships: firebase.firestore.FieldValue.arrayRemove(circleId)
+            memberships: FieldValue.arrayRemove(circleId)
         });
         if (currentView.type === 'CIRCLE' && currentView.id === circleId) {
             navigate({ type: 'HOME' });
@@ -326,6 +365,7 @@ export const App: React.FC = () => {
         const member = circle?.members.find(m => m.id === currentUser.id);
         if (!circle || !member) return;
 
+        // FIX: Use v8 compat syntax for creating a new document reference and setting data.
         const newPostRef = db.collection('posts').doc();
         const newPost: Post = {
             ...postData,
@@ -336,21 +376,24 @@ export const App: React.FC = () => {
         };
         await newPostRef.set(newPost);
         await db.collection('circles').doc(createPostForCircleId).update({
-            posts: firebase.firestore.FieldValue.arrayUnion(newPost.id)
+            posts: FieldValue.arrayUnion(newPost.id)
         });
         setCreatePostForCircleId(null);
     };
     
     const handleToggleLike = (postId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for document reference and transaction.
         const postRef = db.collection('posts').doc(postId);
         db.runTransaction(async (transaction) => {
-            const doc = await transaction.get(postRef);
-            if (!doc.exists) return;
-            const data = doc.data() as Post;
+            const postDoc = await transaction.get(postRef);
+            if (!postDoc.exists) return;
+            const data = postDoc.data() as Post;
             const isLiked = data.likedBy.includes(currentUser.id);
-            const newLikedBy = isLiked ? data.likedBy.filter(id => id !== currentUser.id) : [...data.likedBy, currentUser.id];
-            transaction.update(postRef, { likedBy: newLikedBy, reactions: newLikedBy.length });
+            // FIX: Use v8 compat FieldValue for array operations.
+            const newLikedBy = isLiked ? FieldValue.arrayRemove(currentUser.id) : FieldValue.arrayUnion(currentUser.id);
+            const newReactions = isLiked ? data.reactions - 1 : data.reactions + 1;
+            transaction.update(postRef, { likedBy: newLikedBy, reactions: newReactions });
         });
     };
 
@@ -358,16 +401,8 @@ export const App: React.FC = () => {
         if (!currentUser) return;
         const userRef = db.collection('users').doc(currentUser.id);
         const isSaved = currentUser.savedPosts.includes(postId);
-    
-        if (isSaved) {
-            userRef.update({
-                savedPosts: firebase.firestore.FieldValue.arrayRemove(postId)
-            });
-        } else {
-            userRef.update({
-                savedPosts: firebase.firestore.FieldValue.arrayUnion(postId)
-            });
-        }
+        // FIX: Use v8 compat FieldValue for array operations.
+        userRef.update({ savedPosts: isSaved ? FieldValue.arrayRemove(postId) : FieldValue.arrayUnion(postId) });
     };
 
     const handleDeletePost = async (postId: string) => {
@@ -376,17 +411,19 @@ export const App: React.FC = () => {
         if (!post) return;
         
         if (window.confirm('Are you sure you want to delete this post?')) {
+            // FIX: Use v8 compat syntax for delete and update.
             await db.collection('posts').doc(postId).delete();
             await db.collection('circles').doc(post.circleId).update({
-                posts: firebase.firestore.FieldValue.arrayRemove(postId)
+                posts: FieldValue.arrayRemove(postId)
             });
         }
     };
     
     const handleHideCircle = (circleId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('users').doc(currentUser.id).update({
-            hiddenCircleIds: firebase.firestore.FieldValue.arrayUnion(circleId)
+            hiddenCircleIds: FieldValue.arrayUnion(circleId)
         });
     };
 
@@ -396,9 +433,10 @@ export const App: React.FC = () => {
         const circle = circles.find(c => c.id === post?.circleId);
         if (!circle) return;
 
+        // FIX: Use v8 compat syntax for update with arrayUnion/arrayRemove.
         db.collection('users').doc(currentUser.id).update({
-            interestedTags: firebase.firestore.FieldValue.arrayUnion(...circle.tags),
-            notInterestedTags: firebase.firestore.FieldValue.arrayRemove(...circle.tags)
+            interestedTags: FieldValue.arrayUnion(...circle.tags),
+            notInterestedTags: FieldValue.arrayRemove(...circle.tags)
         });
     };
     
@@ -408,9 +446,10 @@ export const App: React.FC = () => {
         const circle = circles.find(c => c.id === post?.circleId);
         if (!circle) return;
 
+        // FIX: Use v8 compat syntax for update with arrayUnion/arrayRemove.
         db.collection('users').doc(currentUser.id).update({
-            notInterestedTags: firebase.firestore.FieldValue.arrayUnion(...circle.tags),
-            interestedTags: firebase.firestore.FieldValue.arrayRemove(...circle.tags)
+            notInterestedTags: FieldValue.arrayUnion(...circle.tags),
+            interestedTags: FieldValue.arrayRemove(...circle.tags)
         });
     };
 
@@ -422,8 +461,9 @@ export const App: React.FC = () => {
             suggesterUserId: currentUser.id,
             timestamp: new Date()
         };
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            storySuggestions: firebase.firestore.FieldValue.arrayUnion(suggestion)
+            storySuggestions: FieldValue.arrayUnion(suggestion)
         });
     };
 
@@ -438,19 +478,21 @@ export const App: React.FC = () => {
             role: Role.Contributor, loyaltyPoints: 0, chatAccess: ChatAccess.Full,
         };
 
+        // FIX: Use v8 compat syntax for update with arrayUnion/arrayRemove.
         db.collection('circles').doc(circleId).update({
-            members: firebase.firestore.FieldValue.arrayUnion(newMember),
-            joinRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            members: FieldValue.arrayUnion(newMember),
+            joinRequests: FieldValue.arrayRemove(userId)
         });
         db.collection('users').doc(userId).update({
-            memberships: firebase.firestore.FieldValue.arrayUnion(circleId)
+            memberships: FieldValue.arrayUnion(circleId)
         });
     };
 
     const handleDenyRequest = (circleId: string, userId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayRemove.
         db.collection('circles').doc(circleId).update({
-            joinRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            joinRequests: FieldValue.arrayRemove(userId)
         });
     };
 
@@ -460,11 +502,12 @@ export const App: React.FC = () => {
         if (!circle) return;
     
         if (window.confirm(`Are you sure you want to delete "${circle.name}"? This action cannot be undone.`)) {
+            // FIX: Use v8 compat syntax for batch writes.
             const batch = db.batch();
             batch.delete(db.collection('circles').doc(circleId));
             circle.members.forEach(member => {
                 batch.update(db.collection('users').doc(member.id), {
-                    memberships: firebase.firestore.FieldValue.arrayRemove(circleId)
+                    memberships: FieldValue.arrayRemove(circleId)
                 });
             });
             circle.posts.forEach(postId => {
@@ -480,87 +523,97 @@ export const App: React.FC = () => {
     
     const handleRequestPromotion = (circleId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            promotionRequests: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+            promotionRequests: FieldValue.arrayUnion(currentUser.id)
         });
     };
 
     const handleRequestChatAccess = (circleId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            chatAccessRequests: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+            chatAccessRequests: FieldValue.arrayUnion(currentUser.id)
         });
     };
 
     const handleApprovePromotion = async (circleId: string, userId: string) => {
+        // FIX: Use v8 compat syntax for getting and updating a document.
         const circleRef = db.collection('circles').doc(circleId);
-        const doc = await circleRef.get();
-        if (!doc.exists) return;
-        const circle = doc.data() as Circle;
+        const docSnap = await circleRef.get();
+        if (!docSnap.exists) return;
+        const circle = docSnap.data() as Circle;
         const updatedMembers = circle.members.map(m => m.id === userId ? { ...m, role: Role.Contributor } : m);
         circleRef.update({
             members: updatedMembers,
-            promotionRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            promotionRequests: FieldValue.arrayRemove(userId)
         });
     };
 
     const handleDenyPromotion = (circleId: string, userId: string) => {
+        // FIX: Use v8 compat syntax for update with arrayRemove.
         db.collection('circles').doc(circleId).update({
-            promotionRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            promotionRequests: FieldValue.arrayRemove(userId)
         });
     };
 
     const handleApproveChatAccess = async (circleId: string, userId: string, accessLevel: ChatAccess) => {
+        // FIX: Use v8 compat syntax for getting and updating a document.
         const circleRef = db.collection('circles').doc(circleId);
-        const doc = await circleRef.get();
-        if (!doc.exists) return;
-        const circle = doc.data() as Circle;
+        const docSnap = await circleRef.get();
+        if (!docSnap.exists) return;
+        const circle = docSnap.data() as Circle;
         const updatedMembers = circle.members.map(m => m.id === userId ? { ...m, chatAccess: accessLevel } : m);
         circleRef.update({
             members: updatedMembers,
-            chatAccessRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            chatAccessRequests: FieldValue.arrayRemove(userId)
         });
     };
 
     const handleDenyChatAccess = (circleId: string, userId: string) => {
+        // FIX: Use v8 compat syntax for update with arrayRemove.
         db.collection('circles').doc(circleId).update({
-            chatAccessRequests: firebase.firestore.FieldValue.arrayRemove(userId)
+            chatAccessRequests: FieldValue.arrayRemove(userId)
         });
     };
 
     const handleSendFriendRequest = (receiverId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('users').doc(currentUser.id).update({
-            friendRequestsSent: firebase.firestore.FieldValue.arrayUnion(receiverId)
+            friendRequestsSent: FieldValue.arrayUnion(receiverId)
         });
         db.collection('users').doc(receiverId).update({
-            friendRequestsReceived: firebase.firestore.FieldValue.arrayUnion(currentUser.id)
+            friendRequestsReceived: FieldValue.arrayUnion(currentUser.id)
         });
     };
 
     const handleAcceptFriendRequest = (senderId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayUnion/arrayRemove.
         db.collection('users').doc(currentUser.id).update({
-            friends: firebase.firestore.FieldValue.arrayUnion(senderId),
-            friendRequestsReceived: firebase.firestore.FieldValue.arrayRemove(senderId)
+            friends: FieldValue.arrayUnion(senderId),
+            friendRequestsReceived: FieldValue.arrayRemove(senderId)
         });
         db.collection('users').doc(senderId).update({
-            friends: firebase.firestore.FieldValue.arrayUnion(currentUser.id),
-            friendRequestsSent: firebase.firestore.FieldValue.arrayRemove(currentUser.id)
+            friends: FieldValue.arrayUnion(currentUser.id),
+            friendRequestsSent: FieldValue.arrayRemove(senderId)
         });
     };
 
     const handleDeclineFriendRequest = (senderId: string) => {
         if (!currentUser) return;
+        // FIX: Use v8 compat syntax for update with arrayRemove.
         db.collection('users').doc(currentUser.id).update({
-            friendRequestsReceived: firebase.firestore.FieldValue.arrayRemove(senderId)
+            friendRequestsReceived: FieldValue.arrayRemove(senderId)
         });
         db.collection('users').doc(senderId).update({
-            friendRequestsSent: firebase.firestore.FieldValue.arrayRemove(currentUser.id)
+            friendRequestsSent: FieldValue.arrayRemove(senderId)
         });
     };
     
     const handleNotificationAction = (notificationId: string, result: 'handled' | 'denied') => {
+        // FIX: Use v8 compat syntax for update.
         db.collection('notifications').doc(notificationId).update({
             actionState: result,
             isRead: true
@@ -568,10 +621,11 @@ export const App: React.FC = () => {
     };
 
     const handleDismissStorySuggestion = async (circleId: string, postId: string) => {
+        // FIX: Use v8 compat syntax for getting and updating a document.
         const circleRef = db.collection('circles').doc(circleId);
-        const doc = await circleRef.get();
-        if (!doc.exists) return;
-        const circle = doc.data() as Circle;
+        const docSnap = await circleRef.get();
+        if (!docSnap.exists) return;
+        const circle = docSnap.data() as Circle;
         const updatedSuggestions = (circle.storySuggestions || []).filter(s => s.postId !== postId);
         circleRef.update({ storySuggestions: updatedSuggestions });
     };
@@ -596,8 +650,9 @@ export const App: React.FC = () => {
             authorNickname: memberInfo?.nickname || currentUser.name,
             content, timestamp: new Date(),
         };
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('posts').doc(postId).update({
-            comments: firebase.firestore.FieldValue.arrayUnion(newComment)
+            comments: FieldValue.arrayUnion(newComment)
         });
     };
     
@@ -615,8 +670,9 @@ export const App: React.FC = () => {
             id: `chatmsg-${Date.now()}`, authorId: currentUser.id,
             authorNickname: member.nickname, content: content, timestamp: new Date(),
         };
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            chatMessages: firebase.firestore.FieldValue.arrayUnion(newMessage)
+            chatMessages: FieldValue.arrayUnion(newMessage)
         });
     };
 
@@ -627,6 +683,7 @@ export const App: React.FC = () => {
         const updatedStories = circle.stories.map(s => 
             s.id === storyId ? { ...s, viewedBy: [...new Set([...s.viewedBy, currentUser.id])] } : s
         );
+        // FIX: Use v8 compat syntax for update.
         db.collection('circles').doc(circle.id).update({ stories: updatedStories });
     };
 
@@ -636,8 +693,9 @@ export const App: React.FC = () => {
             id: `story-${Date.now()}`, authorMemberId: currentUser.id,
             timestamp: new Date(), viewedBy: [currentUser.id], reactions: [], ...storyData,
         };
+        // FIX: Use v8 compat syntax for update with arrayUnion.
         db.collection('circles').doc(circleId).update({
-            stories: firebase.firestore.FieldValue.arrayUnion(newStory)
+            stories: FieldValue.arrayUnion(newStory)
         });
         setCreateStoryModalOpen(false);
         setSharingPost(null);
@@ -664,6 +722,37 @@ export const App: React.FC = () => {
             }, 500);
         }
     }, [isLoading]);
+    
+    if (firestoreError) {
+        const messageParts = firestoreError.split('```');
+        return (
+            <div className="fixed inset-0 bg-brand-bg z-[9999] flex items-center justify-center p-4 text-brand-text-primary">
+                <div className="bg-brand-surface border border-brand-danger rounded-lg p-6 max-w-2xl w-full">
+                    <div className="flex items-center gap-3 mb-4">
+                        <Icon name="user-block" className="w-8 h-8 text-brand-danger" />
+                        <h1 className="text-2xl font-bold text-brand-danger">Firestore Connection Failed</h1>
+                    </div>
+                    <div className="space-y-3 text-sm">
+                         {messageParts.map((part, index) => {
+                            if (index % 2 === 1) { // This is a code block
+                                return <pre key={index} className="bg-brand-bg p-3 rounded-md text-xs text-brand-text-secondary whitespace-pre-wrap font-mono">{part.trim()}</pre>;
+                            }
+                            // This is regular text, split by newlines to create paragraphs
+                            return part.trim().split('\n').map((line, lineIndex) => (
+                               <p key={`${index}-${lineIndex}`} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                            ));
+                         })}
+                    </div>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="mt-6 w-full bg-brand-primary text-white font-bold py-2.5 px-4 rounded-md hover:bg-brand-secondary transition-colors"
+                    >
+                        Refresh Application
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     if (isLoading) {
       return null;
@@ -684,8 +773,9 @@ export const App: React.FC = () => {
         return <OnboardingPage 
             currentUser={currentUser} 
             circles={circles.filter(c => c.type === CircleType.Public)}
-            onJoinCircle={(circleId) => db.collection('users').doc(currentUser.id).update({memberships: firebase.firestore.FieldValue.arrayUnion(circleId)})}
-            onLeaveCircle={(circleId) => db.collection('users').doc(currentUser.id).update({memberships: firebase.firestore.FieldValue.arrayRemove(circleId)})}
+            // FIX: Use v8 compat syntax for update with arrayUnion/arrayRemove.
+            onJoinCircle={(circleId) => db.collection('users').doc(currentUser.id).update({memberships: FieldValue.arrayUnion(circleId)})}
+            onLeaveCircle={(circleId) => db.collection('users').doc(currentUser.id).update({memberships: FieldValue.arrayRemove(circleId)})}
             onFinish={handleFinishOnboarding} 
         />
     }
@@ -696,7 +786,6 @@ export const App: React.FC = () => {
             case 'HOME':
                 return <HomePage {...pageProps} myCircles={myCircles} allPosts={allPosts} circlesWithActiveStories={myCirclesWithActiveStories} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onLeaveCircle={handleLeaveCircle} onDeletePost={handleDeletePost} onViewStory={(circleId) => setViewingStoryState({ circles: myCirclesWithActiveStories, initialCircleId: circleId })} onOpenCreateStory={() => setCreateStoryModalOpen(true)} onOpenChats={() => navigate({type: 'CHATS'})} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} unreadNotificationsCount={0} onOpenNotifications={() => navigate({ type: 'NOTIFICATIONS' })} hasUnreadChats={false} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'EXPLORE':
-                // FIX: Corrected typo from onRequestToJoinCircle to handleRequestToJoinCircle.
                 return <ExplorePage {...pageProps} exploreFeed={allPosts.map(p => p as any)} onJoinCircle={handleJoinCircle} onLeaveCircle={handleLeaveCircle} onRequestToJoinCircle={handleRequestToJoinCircle} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRefresh={() => {}} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} />;
             case 'CIRCLES':
                 return <CirclesPage {...pageProps} onLeaveCircle={handleLeaveCircle} />;
@@ -705,7 +794,6 @@ export const App: React.FC = () => {
             case 'CIRCLE':
                 const circle = circles.find(c => c.id === currentView.id);
                 if (!circle) return <div>Circle not found</div>;
-                // FIX: Corrected typo from onRequestToJoinCircle to handleRequestToJoinCircle.
                 return <CirclePage {...pageProps} circle={circle} allPosts={allPosts} onToggleLike={handleToggleLike} onOpenComments={setCommentingPostId} onJoin={handleJoinCircle} onRequestToJoin={handleRequestToJoinCircle} onApproveRequest={handleApproveRequest} onDenyRequest={handleDenyRequest} onLeave={handleLeaveCircle} onSendMessage={(content) => handleSendMessageInCircle(circle.id, content)} onOpenEditCircle={setEditingCircleId} onOpenManageMembers={setManagingMembersCircleId} onDeleteCircle={handleDeleteCircle} onDeletePost={handleDeletePost} onTabChange={setActiveCircleTab} onToggleSavePost={handleToggleSavePost} onSharePost={handleSharePost} onRequestPromotion={handleRequestPromotion} onRequestChatAccess={handleRequestChatAccess} onApprovePromotion={handleApprovePromotion} onDenyPromotion={handleDenyPromotion} onApproveChatAccess={handleApproveChatAccess} onDenyChatAccess={handleDenyChatAccess} onHideCircle={handleHideCircle} onMarkInterested={handleMarkInterested} onMarkNotInterested={handleMarkNotInterested} onSuggestForStory={handleSuggestForStory} onOpenHighlightViewer={() => {}} onOpenEditHighlight={() => {}} onOpenCreatePostModal={setCreatePostForCircleId} />;
              case 'CHATS':
                 return <ChatListPage {...pageProps} circleConversations={conversations} userConversations={userConversations} activeTab={activeChatListTab} onTabChange={setActiveChatListTab} unreadCircleCount={0} unreadFriendCount={0} unreadRequestCount={0} onMarkRequestsAsRead={() => {}} />;
@@ -753,6 +841,7 @@ export const App: React.FC = () => {
             {isCreateCircleModalOpen && <CreateCircleModal onClose={() => setCreateCircleModalOpen(false)} onCreate={handleCreateCircle} />}
             {createPostForCircleId && <CreatePostModal circle={circles.find(c => c.id === createPostForCircleId)!} onClose={() => setCreatePostForCircleId(null)} onCreate={handleCreatePost} />}
             {commentingPostId && <CommentModal post={allPosts.find(p => p.id === commentingPostId)!} onClose={() => setCommentingPostId(null)} onAddComment={handleAddComment} currentUser={currentUser} circles={circles} allUsers={users} onViewProfile={(userId) => navigate({ type: 'USER_PROFILE', userId })} />}
+            {/* FIX: Use v8 compat syntax for update. */}
             {isEditProfileModalOpen && <EditProfileModal currentUser={currentUser} onClose={() => setEditProfileModalOpen(false)} onSave={(data) => db.collection('users').doc(currentUser.id).update(data).then(() => setEditProfileModalOpen(false))} />}
             {editingCircleId && <EditCircleModal circle={circles.find(c => c.id === editingCircleId)!} onClose={() => setEditingCircleId(null)} onSave={(id, data) => db.collection('circles').doc(id).update(data).then(() => setEditingCircleId(null))} />}
             {managingMembersCircleId && <ManageMembersModal circle={circles.find(c => c.id === managingMembersCircleId)!} currentUserRole={circles.find(c => c.id === managingMembersCircleId)!.members.find(m => m.id === currentUser.id)!.role} onClose={() => setManagingMembersCircleId(null)} onUpdateRole={(cId, mId, nR) => {}} onRemoveMember={(cId, mId) => {}} />}

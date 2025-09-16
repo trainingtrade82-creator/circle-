@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Icon } from './Icon';
-import firebase from 'firebase/compat/app';
+import type { User as FirebaseUser } from 'firebase/auth';
 
 interface AuthPageProps {
     onLogin: (email: string, password: string) => Promise<string | null>;
     onSignUp: (name: string, username: string, email: string, password: string, birthDate: string) => Promise<string | null>;
     onGoogleSignIn: () => Promise<void>;
     initialError?: string | null;
-    postGoogleSignUpUser: firebase.User | null;
+    postGoogleSignUpUser: FirebaseUser | null;
     onCompleteGoogleSignUp: (name: string, username: string, birthDate: string) => Promise<string | null>;
 }
 
