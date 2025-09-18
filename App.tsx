@@ -34,14 +34,8 @@ import { DesktopNavbar } from './components/DesktopNavbar';
 import { DesktopSidebar } from './components/DesktopSidebar';
 // FIX: Use v8 compat firebase instance and helpers.
 import { auth, db, googleProvider, seedDatabase, Timestamp, FieldValue } from './firebase';
-import { 
-    onAuthStateChanged, 
-    signInWithEmailAndPassword, 
-    createUserWithEmailAndPassword, 
-    signInWithPopup, 
-    signOut,
-    type User as FirebaseUser
-} from 'firebase/auth';
+// FIX: Correctly import firebase to get the User type.
+import firebase from 'firebase/compat/app';
 
 
 export type View =
@@ -69,13 +63,15 @@ type ViewingStoryState = { circles: (Circle & { originalCircleId?: string })[], 
 export type Theme = 'light' | 'dark' | 'grey' | 'blue' | 'system';
 
 export const App: React.FC = () => {
-    const [authUser, setAuthUser] = useState<FirebaseUser | null>(null);
+    // FIX: Use firebase.User as the type for the auth user from Firebase.
+    const [authUser, setAuthUser] = useState<firebase.User | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [users, setUsers] = useState<User[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'system');
     const [authRedirectError, setAuthRedirectError] = useState<string | null>(null);
-    const [postGoogleSignUpUser, setPostGoogleSignUpUser] = useState<FirebaseUser | null>(null);
+    // FIX: Use firebase.User as the type for the auth user from Firebase.
+    const [postGoogleSignUpUser, setPostGoogleSignUpUser] = useState<firebase.User | null>(null);
     const [firestoreError, setFirestoreError] = useState<string | null>(null);
 
     // --- All data state is now from Firestore ---
@@ -149,14 +145,29 @@ export const App: React.FC = () => {
         const createListener = (collectionName: string, setter: React.Dispatch<React.SetStateAction<any[]>>) => {
             // FIX: Use v8 compat syntax for onSnapshot listener.
             return db.collection(collectionName).onSnapshot((snapshot) => {
-                setter(snapshot.docs.map(doc => {
+                const items: any[] = [];
+                snapshot.forEach(doc => {
                     const data = doc.data();
-                    // Convert Firestore Timestamps to JS Dates
-                    if (data.timestamp && data.timestamp instanceof Timestamp) {
-                        data.timestamp = data.timestamp.toDate();
-                    }
-                    return { id: doc.id, ...data };
-                }));
+                    // Convert Firestore Timestamps to JS Dates recursively
+                    const convertTimestamps = (obj: any): any => {
+                        if (obj === null || typeof obj !== 'object') {
+                            return obj;
+                        }
+                        if (obj instanceof Timestamp) {
+                            return obj.toDate();
+                        }
+                        if (Array.isArray(obj)) {
+                            return obj.map(convertTimestamps);
+                        }
+                        const newObj: { [key: string]: any } = {};
+                        for (const key in obj) {
+                            newObj[key] = convertTimestamps(obj[key]);
+                        }
+                        return newObj;
+                    };
+                    items.push({ id: doc.id, ...convertTimestamps(data) });
+                });
+                setter(items);
             }, (error) => handleError(error, collectionName));
         };
 
@@ -174,7 +185,8 @@ export const App: React.FC = () => {
     // --- FIREBASE AUTH ---
     useEffect(() => {
         let userDocListener: (() => void) | undefined;
-        const authListener = onAuthStateChanged(auth, user => {
+        // FIX: Use v8 compat auth.onAuthStateChanged method.
+        const authListener = auth.onAuthStateChanged(user => {
             if (userDocListener) userDocListener(); // Cleanup previous listener
 
             setIsLoading(true);
@@ -214,7 +226,8 @@ export const App: React.FC = () => {
 
     const handleLogin = async (email: string, password: string): Promise<string | null> => {
         try {
-            await signInWithEmailAndPassword(auth, email, password);
+            // FIX: Use v8 compat auth.signInWithEmailAndPassword method.
+            await auth.signInWithEmailAndPassword(email, password);
             return null;
         } catch (error: any) {
             return error.message;
@@ -229,7 +242,8 @@ export const App: React.FC = () => {
             if (!usernameSnapshot.empty) {
                 return "Username is already taken. Please choose another one.";
             }
-            const cred = await createUserWithEmailAndPassword(auth, email, password);
+            // FIX: Use v8 compat auth.createUserWithEmailAndPassword method.
+            const cred = await auth.createUserWithEmailAndPassword(email, password);
             if (cred.user) {
                 const newUser: User = {
                     id: cred.user.uid, name, username, email, birthDate, bio: '', memberships: [], friends: [], friendRequestsSent: [], friendRequestsReceived: [], blockedUsers: [], mutedUsers: [], isPrivate: false, savedPosts: [], interestedTags: [], notInterestedTags: [], hiddenCircleIds: [], hasCompletedOnboarding: false,
@@ -247,7 +261,8 @@ export const App: React.FC = () => {
 
     const handleGoogleSignIn = async (): Promise<void> => {
         try {
-            await signInWithPopup(auth, googleProvider);
+            // FIX: Use v8 compat auth.signInWithPopup method.
+            await auth.signInWithPopup(googleProvider);
         } catch (error: any) {
             console.error("Google sign in popup error:", error);
             if (error.code === 'auth/popup-closed-by-user') {
@@ -290,7 +305,8 @@ export const App: React.FC = () => {
     };
     
     const handleLogout = async () => {
-        await signOut(auth);
+        // FIX: Use v8 compat auth.signOut method.
+        await auth.signOut();
         setCurrentUser(null);
         setHistory([{ type: 'HOME' }]);
     };
@@ -770,6 +786,29 @@ export const App: React.FC = () => {
     }
 
     if (!currentUser.hasCompletedOnboarding) {
+        if (circles.length === 0) {
+            return (
+                <div className="bg-brand-bg min-h-screen font-sans text-brand-text-primary flex justify-center items-center p-2 md:p-4">
+                    <div className="w-full max-w-md h-[800px] max-h-[90vh] bg-brand-surface rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-brand-border">
+                        <header className="p-4 border-b border-brand-border text-center flex-shrink-0">
+                            <h1 className="text-2xl font-bold">Welcome, {currentUser.name}!</h1>
+                            <p className="text-brand-text-secondary mt-1">Finding circles for you to join...</p>
+                        </header>
+                        <div className="flex-1 flex items-center justify-center">
+                            <Icon name="refresh" className="w-12 h-12 text-brand-text-secondary animate-spin" />
+                        </div>
+                        <footer className="p-4 border-t border-brand-border flex-shrink-0">
+                             <button 
+                                disabled={true}
+                                className="w-full bg-brand-accent text-white font-bold py-3 px-4 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                Continue (0 joined)
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            );
+        }
         return <OnboardingPage 
             currentUser={currentUser} 
             circles={circles.filter(c => c.type === CircleType.Public)}
@@ -845,7 +884,7 @@ export const App: React.FC = () => {
             {isEditProfileModalOpen && <EditProfileModal currentUser={currentUser} onClose={() => setEditProfileModalOpen(false)} onSave={(data) => db.collection('users').doc(currentUser.id).update(data).then(() => setEditProfileModalOpen(false))} />}
             {editingCircleId && <EditCircleModal circle={circles.find(c => c.id === editingCircleId)!} onClose={() => setEditingCircleId(null)} onSave={(id, data) => db.collection('circles').doc(id).update(data).then(() => setEditingCircleId(null))} />}
             {managingMembersCircleId && <ManageMembersModal circle={circles.find(c => c.id === managingMembersCircleId)!} currentUserRole={circles.find(c => c.id === managingMembersCircleId)!.members.find(m => m.id === currentUser.id)!.role} onClose={() => setManagingMembersCircleId(null)} onUpdateRole={(cId, mId, nR) => {}} onRemoveMember={(cId, mId) => {}} />}
-            {viewingStoryState && <StoryViewerModal circles={viewingStoryState.circles} initialCircleId={viewingStoryState.initialCircleId} currentUser={currentUser} allPosts={allPosts} onClose={() => setViewingStoryState(null)} onStoryViewed={handleStoryViewed} onAddReaction={(sId, e) => {}} onSendReply={(sId, cId, t) => {}} navigate={navigate} />}
+            {viewingStoryState && <StoryViewerModal circles={viewingStoryState.circles} initialCircleId={viewingStoryState.initialCircleId} currentUser={currentUser} allPosts={allPosts} onClose={() => setViewingStoryState(null)} onStoryViewed={handleStoryViewed} onAddReaction={(sId, e) => {}} onSendReply={(sId, cId, t) => {}} navigate={navigate} onDeleteStory={() => {}} onMuteUser={() => {}} onOpenAddToHighlightModal={() => {}} />}
             {isCreateStoryModalOpen && <CreateStoryModal circles={myCircles} allPosts={allPosts} sharedPost={sharingPost} onClose={() => { setCreateStoryModalOpen(false); setSharingPost(null); }} onCreate={handleCreateStory} />}
             {sharingPost && <ShareModal post={sharingPost} currentUser={currentUser} userConversations={userConversations} circleConversations={conversations} circles={circles} allUsers={users} canCreateStory={true} onClose={() => setSharingPost(null)} onShareToChat={() => {}} onSharePostToStory={() => { setCreateStoryModalOpen(true); }} onCopyLink={() => {}} onNativeShare={() => {}} navigate={navigate} onViewProfile={onViewProfile} shareFeedback={shareFeedback} />}
             {addToHighlightItem && <AddToHighlightModal item={addToHighlightItem} circle={circles.find(c => c.id === addToHighlightItem.circleId)!} onClose={() => setAddToHighlightItem(null)} onAddToHighlight={() => {}} />}

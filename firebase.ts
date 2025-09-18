@@ -31,6 +31,16 @@ export const FieldValue = firebase.firestore.FieldValue;
 export const Timestamp = firebase.firestore.Timestamp;
 export { firebase as app }; // Export for checking config in App.tsx
 
+// Configure Firestore settings. This should be done before any other Firestore operations.
+db.settings({
+  // This setting prevents errors when writing objects with `undefined` properties.
+  // The SDK will simply ignore these properties instead of throwing an error.
+  ignoreUndefinedProperties: true,
+  // This forces the SDK to use a more compatible transport layer, which can
+  // resolve stubborn connection issues in some network environments.
+  experimentalForceLongPolling: true,
+});
+
 // Enable offline persistence to handle connection issues gracefully.
 // FIX: Use v8 compat syntax for enabling persistence.
 db.enablePersistence().catch((err: any) => {

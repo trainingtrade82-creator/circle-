@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Icon } from './Icon';
-import type { User as FirebaseUser } from 'firebase/auth';
+// FIX: Correctly import firebase to get the User type.
+import firebase from 'firebase/compat/app';
 
 interface AuthPageProps {
     onLogin: (email: string, password: string) => Promise<string | null>;
     onSignUp: (name: string, username: string, email: string, password: string, birthDate: string) => Promise<string | null>;
     onGoogleSignIn: () => Promise<void>;
     initialError?: string | null;
-    postGoogleSignUpUser: FirebaseUser | null;
+    // FIX: Use firebase.User as the type for the auth user from Firebase.
+    postGoogleSignUpUser: firebase.User | null;
     onCompleteGoogleSignUp: (name: string, username: string, birthDate: string) => Promise<string | null>;
 }
 
